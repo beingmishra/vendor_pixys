@@ -184,8 +184,8 @@ ifeq ($(TARGET_KERNEL_CLANG_COMPILE),true)
     endif
 endif
 
-ifneq ($(TARGET_KERNEL_MODULES),)
-    $(error TARGET_KERNEL_MODULES is no longer supported!)
+ifeq ($(TARGET_KERNEL_MODULES),)
+    TARGET_KERNEL_MODULES := $(KERNEL_OUT)/.no_external_modules
 endif
 
 PATH_OVERRIDE += PATH=$(KERNEL_TOOLCHAIN_PATH_gcc)/bin:$$PATH
@@ -194,30 +194,7 @@ PATH_OVERRIDE += PATH=$(KERNEL_TOOLCHAIN_PATH_gcc)/bin:$$PATH
 PATH_OVERRIDE += $(TOOLS_PATH_OVERRIDE)
 
 KERNEL_ADDITIONAL_CONFIG_OUT := $(KERNEL_OUT)/.additional_config
-
-# Internal implementation of make-kernel-target
-# $(1): output path (The value passed to O=)
-# $(2): target to build (eg. defconfig, modules, dtbo.img)
-define internal-make-kernel-target
-$(PATH_OVERRIDE) $(KERNEL_MAKE_CMD) $(KERNEL_MAKE_FLAGS) -C $(KERNEL_SRC) O=$(1) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) $(KERNEL_CLANG_TRIPLE) $(KERNEL_CC) $(2)
-endef
-
-# Make a kernel target
-# $(1): The kernel target to build (eg. defconfig, modules, modules_install)
-define make-kernel-target
-$(call internal-make-kernel-target,$(KERNEL_OUT),$(1))
-endef
-
-# Make a DTBO target
-# $(1): The DTBO target to build (eg. dtbo.img, defconfig)
-define make-dtbo-target
-$(call internal-make-kernel-target,$(PRODUCT_OUT)/dtbo,$(1))
-endef
-
-$(KERNEL_OUT):
-	mkdir -p $(KERNEL_OUT)
-
-$(KERNEL_ADDITIONAL_CONFIG_OUT): $(KERNEL_OUT)
+$(KERNEL_ADDITIONAL_CONFIG_OUT):
 	$(hide) cmp -s $(KERNEL_ADDITIONAL_CONFIG_SRC) $@ || cp $(KERNEL_ADDITIONAL_CONFIG_SRC) $@;
 
 $(KERNEL_CONFIG): $(KERNEL_DEFCONFIG_SRC) $(KERNEL_ADDITIONAL_CONFIG_OUT)
@@ -236,7 +213,8 @@ $(KERNEL_CONFIG): $(KERNEL_DEFCONFIG_SRC) $(KERNEL_ADDITIONAL_CONFIG_OUT)
 			$(call make-kernel-target,KCONFIG_ALLCONFIG=$(KERNEL_OUT)/.config alldefconfig); \
 		fi
 
-$(TARGET_PREBUILT_INT_KERNEL): $(KERNEL_CONFIG)
+TARGET_KERNEL_BINARIES := $(KERNEL_OUT)/.kernel_binaries
+$(TARGET_KERNEL_BINARIES): $(KERNEL_CONFIG)
 	@echo "Building Kernel"
 	$(call make-kernel-target,$(BOARD_KERNEL_IMAGE_NAME))
 	$(hide) if grep -q '^CONFIG_OF=y' $(KERNEL_CONFIG); then \
@@ -245,13 +223,19 @@ $(TARGET_PREBUILT_INT_KERNEL): $(KERNEL_CONFIG)
 		fi
 	$(hide) if grep -q '=m' $(KERNEL_CONFIG); then \
 			echo "Building Kernel Modules"; \
-			$(call make-kernel-target,modules) || exit "$$?"; \
+			$(PATH_OVERRIDE) $(MAKE_PREBUILT) $(KERNEL_MAKE_FLAGS) -C $(KERNEL_SRC) O=$(KERNEL_OUT) ARCH=$(KERNEL_ARCH) $(KERNEL_CROSS_COMPILE) $(KERNEL_CLANG_TRIPLE) $(KERNEL_CC) modules; \
+		fi
+	$(hide) if grep -q '^CONFIG_MODULES=y' $(KERNEL_CONFIG); then \
 			echo "Installing Kernel Modules"; \
 			$(call make-kernel-target,INSTALL_MOD_PATH=$(MODULES_INTERMEDIATES) INSTALL_MOD_STRIP=1 modules_install); \
 			kernel_release=$$(cat $(KERNEL_RELEASE)) \
 			modules=$$(find $(MODULES_INTERMEDIATES)/lib/modules/$$kernel_release -type f -name '*.ko'); \
 			($(call build-image-kernel-modules,$$modules,$(KERNEL_MODULES_OUT),$(KERNEL_MODULE_MOUNTPOINT)/,$(KERNEL_DEPMOD_STAGING_DIR))); \
 		fi
+
+$(TARGET_KERNEL_MODULES): $(TARGET_KERNEL_BINARIES)
+
+$(TARGET_PREBUILT_INT_KERNEL): $(TARGET_KERNEL_MODULES)
 
 .PHONY: kerneltags
 kerneltags: $(KERNEL_CONFIG)
